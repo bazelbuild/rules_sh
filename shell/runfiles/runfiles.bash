@@ -128,6 +128,90 @@ function __runfiles_escape_grep() {
 }
 export -f __runfiles_escape_grep
 
+# Lexically resolves the "." and ".." segments in the given rlocation path.
+# Fails if the path is empty or would escape the runfiles root.
+function __runfiles_normalize_rlocation_path() {
+  local rest="$1"
+  local normalized=
+  local segment
+  while [[ -n "$rest" ]]; do
+    if [[ "$rest" == */* ]]; then
+      segment="${rest%%/*}"
+      rest="${rest#*/}"
+    else
+      segment="$rest"
+      rest=
+    fi
+    case "$segment" in
+      "" | ".")
+        ;;
+      "..")
+        if [[ "$normalized" == */* ]]; then
+          normalized="${normalized%/*}"
+        elif [[ -n "$normalized" ]]; then
+          normalized=
+        else
+          return 1
+        fi
+        ;;
+      *)
+        normalized="${normalized:+$normalized/}$segment"
+        ;;
+    esac
+  done
+  [[ -n "$normalized" ]] || return 1
+  echo "$normalized"
+}
+export -f __runfiles_normalize_rlocation_path
+
+# Resolves the target of a runfiles manifest entry to a path in the local file system.
+#
+# Bazel stores the target of an unresolved symlink (ctx.actions.declare_symlink) in the manifest
+# verbatim, so unlike all other targets it may be a relative path. In a materialized runfiles
+# directory the entry is a symlink with that very target, which the file system resolves relative to
+# the directory containing the symlink. A relative target thus has to be interpreted as an rlocation
+# path relative to the directory of the entry and looked up in the manifest again.
+#
+# Arguments:
+#   $1: the rlocation path of the manifest entry
+#   $2: the target of the manifest entry
+#   $3: the path to append to the target, if any
+#   $4: the current lookup depth, used to break out of cycles of unresolved symlinks
+# Prints the resolved path if it exists and the empty string otherwise.
+function __runfiles_resolve_manifest_target() {
+  if [[ "$2" =~ $_RLOCATION_ISABS_PATTERN || "$2" == /* ]]; then
+    local -r resolved="$2$3"
+    if [[ -e "$resolved" ]]; then
+      if [[ "${RUNFILES_LIB_DEBUG:-}" == 1 ]]; then
+        echo >&2 "INFO[runfiles.bash]: rlocation($1$3): found in manifest as ($resolved)"
+      fi
+      echo "$resolved"
+    else
+      if [[ "${RUNFILES_LIB_DEBUG:-}" == 1 ]]; then
+        echo >&2 "INFO[runfiles.bash]: rlocation($1$3): found in manifest as ($resolved), but file does not exist"
+      fi
+      echo ""
+    fi
+    return 0
+  fi
+
+  local entry_dir="${1%/*}"
+  [[ "$entry_dir" == "$1" ]] && entry_dir=
+  local target_rlocation_path
+  target_rlocation_path=$(__runfiles_normalize_rlocation_path "${entry_dir:+$entry_dir/}$2$3") || {
+    if [[ "${RUNFILES_LIB_DEBUG:-}" == 1 ]]; then
+      echo >&2 "ERROR[runfiles.bash]: rlocation($1$3): unresolved symlink target ($2) points outside the runfiles tree"
+    fi
+    echo ""
+    return 0
+  }
+  if [[ "${RUNFILES_LIB_DEBUG:-}" == 1 ]]; then
+    echo >&2 "INFO[runfiles.bash]: rlocation($1$3): unresolved symlink target ($2) resolves to ($target_rlocation_path)"
+  fi
+  runfiles_rlocation_checked "$target_rlocation_path" "$(($4 + 1))"
+}
+export -f __runfiles_resolve_manifest_target
+
 # Prints to stdout the runtime location of a data-dependency.
 # The optional second argument can be used to specify the canonical name of the
 # repository whose repository mapping should be used to resolve the repository
@@ -374,6 +458,16 @@ function runfiles_rlocation_checked() {
   # FIXME: If the runfiles lookup fails, the exit code of this function is 0 if
   #  and only if the runfiles manifest exists. In particular, the exit code
   #  behavior is not consistent across platforms.
+  # The optional second argument is the current lookup depth, which only differs from zero while
+  # following the target of an unresolved symlink.
+  local -r depth="${2:-0}"
+  if [[ "$depth" -gt 32 ]]; then
+    if [[ "${RUNFILES_LIB_DEBUG:-}" == 1 ]]; then
+      echo >&2 "ERROR[runfiles.bash]: rlocation($1): too many levels of symbolic links"
+    fi
+    echo ""
+    return 0
+  fi
   # The manifest takes precedence over the runfiles directory: whether the directory is populated
   # is a property of the execution of the action or test, which is not known at analysis time, so
   # the directory may exist but contain the stale contents of a previous execution. If the manifest
@@ -438,11 +532,16 @@ function runfiles_rlocation_checked() {
           prefix_result="${prefix_result//\\b/\\}"
         fi
         [[ -z "$prefix_result" ]] && continue
-        local -r candidate="${prefix_result}${1#"${prefix}"}"
-        if [[ -e "$candidate" ]]; then
-          if [[ "${RUNFILES_LIB_DEBUG:-}" == 1 ]]; then
-            echo >&2 "INFO[runfiles.bash]: rlocation($1): found in manifest as ($candidate) via prefix ($prefix)"
-          fi
+        if [[ "${RUNFILES_LIB_DEBUG:-}" == 1 ]]; then
+          echo >&2 "INFO[runfiles.bash]: rlocation($1): found in manifest via prefix ($prefix)"
+        fi
+        local candidate
+        # The trailing marker prevents command substitution from stripping a newline that is part
+        # of the resolved path.
+        candidate=$(__runfiles_resolve_manifest_target \
+            "$prefix" "$prefix_result" "${1#"${prefix}"}" "$depth"; echo -n x)
+        candidate="${candidate%$'\n'x}"
+        if [[ -n "$candidate" ]]; then
           echo "$candidate"
           return 0
         fi
@@ -457,7 +556,7 @@ function runfiles_rlocation_checked() {
         #    better to return no path rather than a potentially different,
         #    non-empty path.
         if [[ "${RUNFILES_LIB_DEBUG:-}" == 1 ]]; then
-          echo >&2 "INFO[runfiles.bash]: rlocation($1): found in manifest as ($candidate) via prefix ($prefix), but file does not exist"
+          echo >&2 "INFO[runfiles.bash]: rlocation($1): prefix ($prefix) did not resolve, not retrying with a shorter one"
         fi
         break
       done
@@ -470,17 +569,7 @@ function runfiles_rlocation_checked() {
         result="${result//\\n/$'\n'}"
         result="${result//\\b/\\}"
       fi
-      if [[ -e "$result" ]]; then
-        if [[ "${RUNFILES_LIB_DEBUG:-}" == 1 ]]; then
-          echo >&2 "INFO[runfiles.bash]: rlocation($1): found in manifest as ($result)"
-        fi
-        echo "$result"
-      else
-        if [[ "${RUNFILES_LIB_DEBUG:-}" == 1 ]]; then
-          echo >&2 "INFO[runfiles.bash]: rlocation($1): found in manifest as ($result), but file does not exist"
-        fi
-        echo ""
-      fi
+      __runfiles_resolve_manifest_target "$1" "$result" "" "$depth"
     fi
   elif [[ -e "${RUNFILES_DIR:-/dev/null}/$1" ]]; then
     if [[ "${RUNFILES_LIB_DEBUG:-}" == 1 ]]; then

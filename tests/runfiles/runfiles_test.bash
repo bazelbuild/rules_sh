@@ -209,6 +209,112 @@ EOF
   [[ -z "$(rlocation "dir with spaces/nested/file" || echo failed)" ]] || fail
 }
 
+# Writes a runfiles layout containing unresolved symlinks with relative targets, both as a manifest
+# pointing at the original files and as a materialized runfiles directory.
+function write_relative_symlink_target_layout() {
+  local -r tmpdir="$1"
+  local -r dir="$tmpdir/foo.runfiles"
+
+  mkdir -p "$tmpdir/original/dir/deeply/nested"
+  echo file > "$tmpdir/original/file"
+  echo nested_file > "$tmpdir/original/dir/deeply/nested/file"
+  # Lies next to the runfiles directory and is thus only reachable through a relative target that
+  # leaves the runfiles tree.
+  echo outside > "$tmpdir/outside"
+
+  cat > "$tmpdir/foo.runfiles_manifest" << EOF
+_main/pkg/file $tmpdir/original/file
+_main/pkg/dir $tmpdir/original/dir
+_main/pkg/link ../pkg/file
+_main/pkg/nested/link ../../pkg/link
+_main/pkg/dir_link ./dir
+_main/pkg/dangling ../pkg/missing
+_main/pkg/escaping ../../../outside
+_main/pkg/loop_a loop_b
+_main/pkg/loop_b loop_a
+ _main/pkg/link\swith\sspaces ../pkg/file
+EOF
+
+  mkdir -p "$dir/_main/pkg/nested"
+  ln -s "$tmpdir/original/file" "$dir/_main/pkg/file"
+  ln -s "$tmpdir/original/dir" "$dir/_main/pkg/dir"
+  ln -s ../pkg/file "$dir/_main/pkg/link"
+  ln -s ../../pkg/link "$dir/_main/pkg/nested/link"
+  ln -s ./dir "$dir/_main/pkg/dir_link"
+  ln -s ../pkg/missing "$dir/_main/pkg/dangling"
+  ln -s ../../../outside "$dir/_main/pkg/escaping"
+  ln -s loop_b "$dir/_main/pkg/loop_a"
+  ln -s loop_a "$dir/_main/pkg/loop_b"
+  ln -s ../pkg/file "$dir/_main/pkg/link with spaces"
+}
+
+# Asserts that the given rlocation path resolves to a file with the given contents. Only the
+# contents are compared since the path itself necessarily differs between the two lookup modes: a
+# materialized runfiles directory resolves to the entry in that directory, not to the file it
+# points at.
+function assert_rlocation_contents() {
+  local -r resolved="$(rlocation "$1" || echo failed)"
+  [[ -f "$resolved" ]] || fail "$1 did not resolve to a file, got: $resolved"
+  [[ "$(cat "$resolved")" == "$2" ]] || fail "$1 resolved to $resolved with unexpected contents"
+}
+
+# Asserts that the given rlocation path does not resolve, which rlocation reports as an empty result
+# when it uses the manifest and as a non-zero exit code when it uses the runfiles directory (see the
+# FIXME on runfiles_rlocation_checked).
+function assert_no_rlocation() {
+  local -r resolved="$(rlocation "$1" || echo failed)"
+  [[ -z "$resolved" || "$resolved" == failed ]] || fail "$1 unexpectedly resolved to $resolved"
+}
+
+# The lookups whose outcome must not depend on whether the manifest or the runfiles directory backs
+# them: resolving a relative target against the manifest has to arrive at the same file that the
+# file system arrives at when resolving the corresponding symlink in the runfiles directory.
+function assert_relative_symlink_target_lookups() {
+  assert_rlocation_contents _main/pkg/link file
+  assert_rlocation_contents _main/pkg/nested/link file
+  assert_rlocation_contents "_main/pkg/link with spaces" file
+  # A relative target that resolves to a directory runfile also resolves paths underneath it.
+  [[ -d "$(rlocation _main/pkg/dir_link || echo failed)" ]] || fail
+  assert_rlocation_contents _main/pkg/dir_link/deeply/nested/file nested_file
+  # A target that doesn't resolve to an existing file behaves like a missing runfile.
+  assert_no_rlocation _main/pkg/dangling
+  assert_no_rlocation _main/pkg/dir_link/does/not/exist
+  # A cycle terminates instead of looping forever.
+  assert_no_rlocation _main/pkg/loop_a
+}
+
+function test_manifest_based_relative_symlink_targets() {
+  local -r tmpdir="$(mktemp -d $TEST_TMPDIR/tmp.XXXXXXXX)"
+  write_relative_symlink_target_layout "$tmpdir"
+
+  export RUNFILES_DIR=
+  export RUNFILES_MANIFEST_FILE=$tmpdir/foo.runfiles_manifest
+  source "$runfiles_lib_path"
+
+  assert_relative_symlink_target_lookups
+  # The one lookup the manifest cannot reproduce: a relative target that leaves the runfiles tree
+  # can only be resolved against a materialized runfiles directory, whose existence the manifest
+  # does not imply. Bazel does not generate such a runfile.
+  assert_no_rlocation _main/pkg/escaping
+}
+
+function test_directory_based_relative_symlink_targets() {
+  # MSYS2 may materialize symlinks as copies, which does not preserve relative targets.
+  if is_windows; then
+    return 0
+  fi
+
+  local -r tmpdir="$(mktemp -d $TEST_TMPDIR/tmp.XXXXXXXX)"
+  write_relative_symlink_target_layout "$tmpdir"
+
+  export RUNFILES_DIR="$tmpdir/foo.runfiles"
+  export RUNFILES_MANIFEST_FILE=
+  source "$runfiles_lib_path"
+
+  assert_relative_symlink_target_lookups
+  assert_rlocation_contents _main/pkg/escaping outside
+}
+
 function test_manifest_based_envvars() {
   local tmpdir="$(mktemp -d $TEST_TMPDIR/tmp.XXXXXXXX)"
   echo "a b" > $tmpdir/foo.runfiles_manifest
