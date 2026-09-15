@@ -7,3 +7,4 @@ local_path_override(
 )
 
 bazel_dep(name = "bazel_features", version = "1.34.0")
+bazel_dep(name = "platforms", version = "0.0.10")

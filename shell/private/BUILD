@@ -10,4 +10,5 @@ bzl_library(
         "sh_test.bzl",
     ],
     visibility = ["//shell:__pkg__"],
+    deps = ["@bazel_skylib//rules:common_settings"],
 )

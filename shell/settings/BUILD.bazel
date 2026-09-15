@@ -1,0 +1,25 @@
+load("@bazel_skylib//rules:common_settings.bzl", "bool_flag")
+
+# Opt in to the pure-POSIX-shell runfiles library.
+#
+# When enabled, `//shell/runfiles` provides `runfiles.sh`, the pure-POSIX
+# implementation, instead of `runfiles.bash`, and `sh_binary` / `sh_test`
+# generate a pure-POSIX launcher that initializes it. The two libraries have
+# the same public API and are validated against the same test suite, and
+# `runfiles.sh` is installed at the same runfiles path, so scripts using the
+# documented bash initialization snippet keep working unchanged.
+#
+# The flag is a kill switch: with it off, nothing about the generated output
+# changes; with it on, every code path goes through the POSIX implementation.
+#
+# Lifecycle:
+#   now    experimental, default False; set it to True to try it and report
+#          problems
+#   next   the default flips to True
+#   final  the flag and `runfiles.bash` are removed, leaving only the POSIX
+#          implementation
+bool_flag(
+    name = "experimental_use_shell_runfiles",
+    build_setting_default = False,
+    visibility = ["//visibility:public"],
+)
