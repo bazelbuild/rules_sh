@@ -5,7 +5,9 @@ buildifier: 8.2.1
 matrix:
   platform:
     - ubuntu2004
+    - ubuntu2004_arm64
     - macos
+    - macos_arm64
     - windows
   legacy_bazel:
     - 7.*
@@ -62,3 +64,78 @@ tasks:
       - "//tests/..."
     test_targets:
       - "//tests/..."
+  test_module_bzlmod_shell_runfiles:
+    name: "Test module (Bzlmod + POSIX Runfiles)"
+    working_directory: "tests/bcr"
+    bazel: ${{ modern_bazel }}
+    platform: ${{ platform }}
+    build_flags:
+      - "--enable_bzlmod"
+      - "--@rules_shell//shell/settings:experimental_use_shell_runfiles=True"
+    build_targets:
+      - "//..."
+    test_flags:
+      - "--enable_bzlmod"
+      - "--@rules_shell//shell/settings:experimental_use_shell_runfiles=True"
+    test_targets:
+      - "//..."
+  test_posix_shell_runfiles:
+    # Explicit dash coverage for the POSIX shell runfiles library. Local
+    # repro: bazel test --config=posix_shell //tests/runfiles/...
+    name: "POSIX Runfiles (dash, ${{modern_bazel}})"
+    bazel: ${{ modern_bazel }}
+    platform: ubuntu2004
+    shell_commands:
+      - "/bin/dash -c 'echo dash ready'"
+    build_flags:
+      - "--config=posix_shell"
+      - "--@rules_shell//shell/settings:experimental_use_shell_runfiles=True"
+    build_targets:
+      - "//tests/runfiles:runfiles_sh_test"
+    test_flags:
+      - "--config=posix_shell"
+      - "--@rules_shell//shell/settings:experimental_use_shell_runfiles=True"
+    test_targets:
+      - "//tests/runfiles:runfiles_sh_test"
+  test_module_posix_shell_runfiles:
+    # Dash coverage for a consuming module. This is what exercises the
+    # `use_bash_launcher` launcher snippet under a non-bash sh_toolchain; see
+    # tests/bcr/posix_launcher, whose scripts initialize the runfiles library
+    # themselves because a POSIX shell cannot export functions across exec.
+    name: "Test module (POSIX Runfiles, dash, ${{modern_bazel}})"
+    working_directory: "tests/bcr"
+    bazel: ${{ modern_bazel }}
+    platform: ubuntu2004
+    shell_commands:
+      - "/bin/dash -c 'echo dash ready'"
+    build_flags:
+      - "--config=posix_shell"
+      - "--@rules_shell//shell/settings:experimental_use_shell_runfiles=True"
+    build_targets:
+      - "//..."
+      # The bash launcher targets deliberately rely on bash exporting the
+      # runfiles functions across exec, which no POSIX shell can do.
+      - "-//bash_launcher/..."
+    test_flags:
+      - "--config=posix_shell"
+      - "--@rules_shell//shell/settings:experimental_use_shell_runfiles=True"
+    test_targets:
+      - "//..."
+      - "-//bash_launcher/..."
+  test_module_workspace_shell_runfiles:
+    name: "Test module (${{legacy_bazel}}, WORKSPACE + POSIX Runfiles)"
+    working_directory: "tests/bcr"
+    bazel: ${{ legacy_bazel }}
+    platform: ${{ platform }}
+    build_flags:
+      - "--noenable_bzlmod"
+      - "--enable_workspace"
+      - "--@rules_shell//shell/settings:experimental_use_shell_runfiles=True"
+    build_targets:
+      - "//..."
+    test_flags:
+      - "--noenable_bzlmod"
+      - "--enable_workspace"
+      - "--@rules_shell//shell/settings:experimental_use_shell_runfiles=True"
+    test_targets:
+      - "//..."

@@ -1,2 +1,8 @@
 common --check_direct_dependencies=off
 common --keep_going
+
+# --config=posix_shell forces the sh_toolchain to resolve to /bin/dash via
+# BAZEL_SH. Used by the `test_posix_shell_runfiles` presubmit task and
+# available locally: `bazel test --config=posix_shell //tests/runfiles/...`.
+# Only takes effect on hosts where /bin/dash exists (i.e. Debian/Ubuntu).
+common:posix_shell --repo_env=BAZEL_SH=/bin/dash

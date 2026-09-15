@@ -46,6 +46,8 @@ msys*|mingw*|cygwin*)
   ;;
 esac
 
+_RUNFILES_LIBRARY_FILE="${RUNFILES_LIBRARY_FILE:-bazel_tools/tools/bash/runfiles/runfiles.bash}"
+
 function find_runfiles_lib() {
   # Unset existing definitions of the functions we want to test.
   if type rlocation >&/dev/null; then
@@ -58,14 +60,14 @@ function find_runfiles_lib() {
       export RUNFILES_MANIFEST_FILE="$0.runfiles_manifest"
     elif [[ -f "$0.runfiles/MANIFEST" ]]; then
       export RUNFILES_MANIFEST_FILE="$0.runfiles/MANIFEST"
-    elif [[ -f "$0.runfiles/bazel_tools/tools/bash/runfiles/runfiles.bash" ]]; then
+    elif [[ -f "$0.runfiles/${_RUNFILES_LIBRARY_FILE}" ]]; then
       export RUNFILES_DIR="$0.runfiles"
     fi
   fi
-  if [[ -f "${RUNFILES_DIR:-/dev/null}/bazel_tools/tools/bash/runfiles/runfiles.bash" ]]; then
-    echo "${RUNFILES_DIR}/bazel_tools/tools/bash/runfiles/runfiles.bash"
+  if [[ -f "${RUNFILES_DIR:-/dev/null}/${_RUNFILES_LIBRARY_FILE}" ]]; then
+    echo "${RUNFILES_DIR}/${_RUNFILES_LIBRARY_FILE}"
   elif [[ -f "${RUNFILES_MANIFEST_FILE:-/dev/null}" ]]; then
-    grep -m1 "^bazel_tools/tools/bash/runfiles/runfiles.bash " \
+    grep -m1 "^${_RUNFILES_LIBRARY_FILE} " \
         "$RUNFILES_MANIFEST_FILE" | cut -d ' ' -f 2-
   else
     echo >&2 "ERROR: cannot find //shell/runfiles:runfiles.bash"

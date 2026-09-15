@@ -1,0 +1,11 @@
+# --config=posix_shell forces the sh_toolchain to resolve to /bin/dash via
+# BAZEL_SH, so that generated launchers run under a non-bash POSIX shell. Used
+# by the `test_module_posix_shell_runfiles` presubmit task and available
+# locally:
+#
+#   bazel test --config=posix_shell \
+#     --@rules_shell//shell/settings:experimental_use_shell_runfiles=True \
+#     //posix_launcher/...
+#
+# Only takes effect on hosts where /bin/dash exists (i.e. Debian/Ubuntu).
+common:posix_shell --repo_env=BAZEL_SH=/bin/dash
